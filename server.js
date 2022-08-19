@@ -1,119 +1,66 @@
-// http://127.0.0.1:9001
-// http://localhost:9001
+const express = require('express')
+const app = express()
+const http = require('http')
+const server = http.createServer(app)
+const { Server } = require("socket.io")
+const io = new Server(server)
 
-const fs = require('fs');
-const path = require('path');
-const url = require('url');
-var httpServer = require('http');
 
-const ioServer = require('socket.io');
-const RTCMultiConnectionServer = require('./node_scripts/index.js');
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/src/index.html')
+})
 
-var PORT = 9001;
-var isUseHTTPs = false;
 
-const jsonPath = {
-    config: 'config.json',
-    logs: 'logs.json'
-};
 
-const BASH_COLORS_HELPER = RTCMultiConnectionServer.BASH_COLORS_HELPER;
-const getValuesFromConfigJson = RTCMultiConnectionServer.getValuesFromConfigJson;
-const getBashParameters = RTCMultiConnectionServer.getBashParameters;
 
-var config = getValuesFromConfigJson(jsonPath);
-config = getBashParameters(config, BASH_COLORS_HELPER);
+let users = []
+let socketToRoom = {}
 
-// if user didn't modifed "PORT" object
-// then read value from "config.json"
-if(PORT === 9001) {
-    PORT = config.port;
-}
-if(isUseHTTPs === false) {
-    isUseHTTPs = config.isUseHTTPs;
-}
+io.on('connection', socket => {
+  //websocket kopunca yeni gelen kullanıcı dahil olamıyor hafızada tut
+  socket.on('join', room => {
+      if (users[room]) {
+          users[room].push({id: socket.id})
+      } else {
+          users[room] = [{id: socket.id}]
+      }
+      socketToRoom[socket.id] = room
 
-function serverHandler(request, response) {
-    // to make sure we always get valid info from json file
-    // even if external codes are overriding it
-    config = getValuesFromConfigJson(jsonPath);
-    config = getBashParameters(config, BASH_COLORS_HELPER);
+      socket.join(room)
+      console.log(`[${socketToRoom[socket.id]}]: ${socket.id} enter`)
 
-    response.writeHead(200, {
-        'Content-Type': 'text/plain'
-    });
-    response.write('RTCMultiConnection Socket.io Server.\n\n' + 'https://github.com/muaz-khan/RTCMultiConnection-Server\n\n' + 'npm install RTCMultiConnection-Server');
-    response.end();
-}
+      const usersInThisRoom = users[room].filter(user => user.id !== socket.id)
+      socket.emit('users',usersInThisRoom)
+  })
 
-var httpApp;
+  socket.on('offer', data => {
+      socket.to(data.offerReceiveID).emit('offer', {sdp: data.sdp, offerSendID: data.offerSendID})
+  })
 
-if (isUseHTTPs) {
-    httpServer = require('https');
+  socket.on('answer', data => {
+      socket.to(data.answerReceiveID).emit('answer', {sdp: data.sdp, answerSendID: data.answerSendID})
+  })
 
-    // See how to use a valid certificate:
-    // https://github.com/muaz-khan/WebRTC-Experiment/issues/62
-    var options = {
-        key: null,
-        cert: null,
-        ca: null
-    };
+  socket.on('candidate', data => {
+      socket.to(data.candidateReceiveID).emit('candidate', {candidate: data.candidate, candidateSendID: data.candidateSendID})
+  })
 
-    var pfx = false;
+  socket.on('disconnect', () => {
+      console.log(`[${socketToRoom[socket.id]}]: ${socket.id} exit`)
+      const roomID = socketToRoom[socket.id]
+      let room = users[roomID]
+      if (room) {
+          room = room.filter(user => user.id !== socket.id)
+          users[roomID] = room
+          if (room.length === 0) {
+              delete users[roomID]
+              return
+          }
+      }
+      socket.to(roomID).emit('user_exit', {id: socket.id})
+  })
+})
 
-    if (!fs.existsSync(config.sslKey)) {
-        console.log(BASH_COLORS_HELPER.getRedFG(), 'sslKey:\t ' + config.sslKey + ' does not exist.');
-    } else {
-        pfx = config.sslKey.indexOf('.pfx') !== -1;
-        options.key = fs.readFileSync(config.sslKey);
-    }
-
-    if (!fs.existsSync(config.sslCert)) {
-        console.log(BASH_COLORS_HELPER.getRedFG(), 'sslCert:\t ' + config.sslCert + ' does not exist.');
-    } else {
-        options.cert = fs.readFileSync(config.sslCert);
-    }
-
-    if (config.sslCabundle) {
-        if (!fs.existsSync(config.sslCabundle)) {
-            console.log(BASH_COLORS_HELPER.getRedFG(), 'sslCabundle:\t ' + config.sslCabundle + ' does not exist.');
-        }
-
-        options.ca = fs.readFileSync(config.sslCabundle);
-    }
-
-    if (pfx === true) {
-        options = {
-            pfx: sslKey
-        };
-    }
-
-    httpApp = httpServer.createServer(options, serverHandler);
-} else {
-    httpApp = httpServer.createServer(serverHandler);
-}
-
-RTCMultiConnectionServer.beforeHttpListen(httpApp, config);
-httpApp = httpApp.listen(process.env.PORT || PORT, process.env.IP || "0.0.0.0", function() {
-    RTCMultiConnectionServer.afterHttpListen(httpApp, config);
-});
-
-// --------------------------
-// socket.io codes goes below
-
-ioServer(httpApp).on('connection', function(socket) {
-    RTCMultiConnectionServer.addSocket(socket, config);
-
-    // ----------------------
-    // below code is optional
-
-    const params = socket.handshake.query;
-
-    if (!params.socketCustomEvent) {
-        params.socketCustomEvent = 'custom-message';
-    }
-
-    socket.on(params.socketCustomEvent, function(message) {
-        socket.broadcast.emit(params.socketCustomEvent, message);
-    });
+server.listen(3000, () => {
+  console.log('dinleme başlasın:3000')
 });
